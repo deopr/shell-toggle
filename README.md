@@ -5,6 +5,9 @@
 
 **Hot-swap the status shell of a live Wayland desktop — one keypress, any number of shells.**
 
+https://github.com/user-attachments/assets/e7ca6222-0ca0-4d59-b490-f1c86e82728d
+
+
 `shell-toggle` was built to flip a MangoWM session between
 [DankMaterialShell](https://danklinux.com) and
 [Caelestia](https://github.com/caelestia-dots/shell), where it is tested.
