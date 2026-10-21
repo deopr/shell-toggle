@@ -140,6 +140,21 @@ shell_noctalia_match=(-f '^(/[^ ]*/)?qs -p /path/to/noctalia/shell.qml$')
 adapter, `shellctl`'s UI keys are simply inert for that shell while volume,
 media and brightness keep working.
 
+Two configs of the *same* shell are just two ids — the launch argv is what
+differs, and `match` distinguishes the running instance:
+
+```bash
+SHELLS=(qs-a qs-b)
+
+shell_qs_a_name="quickshell: minimal"
+shell_qs_a_match=(-f '^(/[^ ]*/)?qs -p .*/minimal/shell.qml$')
+shell_qs_a_launch=(qs -p "$HOME/.config/quickshell/minimal/shell.qml")
+
+shell_qs_b_name="quickshell: full"
+shell_qs_b_match=(-f '^(/[^ ]*/)?qs -p .*/full/shell.qml$')
+shell_qs_b_launch=(qs -p "$HOME/.config/quickshell/full/shell.qml")
+```
+
 ### Process matching
 
 `match` is passed straight to `pgrep`/`pkill`, so it is an argument list, not
