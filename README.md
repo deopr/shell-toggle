@@ -1,6 +1,5 @@
 # shell-toggle
 
-![shell-toggle demo](demo.gif)
 
 [![tests](https://github.com/deopr/shell-toggle/actions/workflows/test.yml/badge.svg)](https://github.com/deopr/shell-toggle/actions/workflows/test.yml)
 
