@@ -9,6 +9,9 @@
 
 SHELLS=(dms caelestia)
 
+# Where this config, its adapters and wallpaper providers live.
+SHELL_TOGGLE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/shell-toggle"
+
 # --- shared settings ------------------------------------------------------
 
 # Optional: symlink that shell-toggle repoints at binds-<binds>.conf.
@@ -34,8 +37,8 @@ shell_dms_launch=(dms run)
 shell_dms_stop=(dms kill)
 shell_dms_warmup="0.45"
 shell_dms_binds="dms"
-shell_dms_adapter="$HOME/.config/shell-toggle/adapters/dms"
-shell_dms_wallpaper="$HOME/.config/shell-toggle/wallpaper/dms"
+shell_dms_adapter="$SHELL_TOGGLE_DIR/adapters/dms"
+shell_dms_wallpaper="$SHELL_TOGGLE_DIR/wallpaper/dms"
 
 # --- Caelestia ------------------------------------------------------------
 # Caelestia is a quickshell config. Anchoring the pattern to the whole
@@ -49,8 +52,8 @@ shell_caelestia_env=(
 )
 shell_caelestia_warmup="0.40"
 shell_caelestia_binds="caelestia"
-shell_caelestia_adapter="$HOME/.config/shell-toggle/adapters/caelestia"
-shell_caelestia_wallpaper="$HOME/.config/shell-toggle/wallpaper/caelestia"
+shell_caelestia_adapter="$SHELL_TOGGLE_DIR/adapters/caelestia"
+shell_caelestia_wallpaper="$SHELL_TOGGLE_DIR/wallpaper/caelestia"
 
 # --- wanted something else? ----------------------------------------------
 # A minimal third shell. Append "waybar" to SHELLS to enable it. No binds,
