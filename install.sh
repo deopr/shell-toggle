@@ -28,6 +28,12 @@ else
 fi
 
 install -m755 "$here/examples/hooks/post-switch" "$confdir/post-switch.example"
+if [ -e "$confdir/post-switch" ]; then
+    echo "kept existing hook:   $confdir/post-switch"
+else
+    install -m755 "$here/examples/hooks/post-switch" "$confdir/post-switch"
+    echo "installed hook:       $confdir/post-switch"
+fi
 
 cat <<EOF
 
@@ -38,10 +44,13 @@ Next:
   1. Make sure $bindir is in the PATH of the process that launches
      your compositor (Mango inherits SDDM's PATH), or use absolute
      paths in keybinds.
-  2. Copy the examples/mango files into your compositor config and make
-     cfg/binds-active.conf a symlink to one of the binds-*.conf files.
-  3. Add to autostart:
+  2. Copy the examples/mango (MangoWM) or examples/hypr (Hyprland)
+     binds into your compositor config and make binds-active.conf a
+     symlink to one of the binds-*.conf files. Other compositors can
+     source the same symlink from their own config.
+  3. Set BINDS_LINK in $confdir/config to that symlink.
+  4. Add to autostart:
        shell-start &
        wallpaper-sync &
-  4. Bind shell-toggle, then press it.
+  5. Bind shell-toggle, press it, then run: shell-toggle check
 EOF

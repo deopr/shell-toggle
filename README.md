@@ -4,11 +4,13 @@
 
 `shell-toggle` was built to flip a MangoWM session between
 [DankMaterialShell](https://danklinux.com) and
-[Caelestia](https://github.com/caelestia-dots/shell), but the switcher itself
-is not attached to either one. Every shell is described in a config file: how
-to launch it, how to recognise its process, how to stop it, and optionally
-which keybinds and wallpaper provider belong to it. Want
-DMS ⇄ Caelestia ⇄ Waybar? Append an id to `SHELLS`, add a block, done.
+[Caelestia](https://github.com/caelestia-dots/shell), where it is tested.
+The switcher itself is not attached to either one, or to Mango: every shell
+is described in a config file: how to launch it, how to recognise its
+process, how to stop it, and optionally which keybinds and wallpaper provider
+belong to it. Want DMS ⇄ Caelestia ⇄ Waybar? Append an id to `SHELLS`, add a
+block, done. Hyprland binds are included; see
+[Compositor support](#compositor-support).
 
 The important part is the handoff: the incoming shell is started first,
 allowed to paint, and only then is the outgoing shell reaped. A broken
@@ -52,9 +54,10 @@ cd shell-toggle
 ./install.sh
 ```
 
-The installer puts the scripts in `~/.local/bin`, and the config, adapters
-and wallpaper providers in `~/.config/shell-toggle`. It keeps an existing
-config and writes the shipped one as `config.example` instead.
+The installer puts the scripts in `~/.local/bin`, and the config, adapters,
+wallpaper providers and a compositor-reload hook in
+`~/.config/shell-toggle`. It keeps an existing config and writes the shipped
+one as `config.example` instead.
 
 Requirements:
 
@@ -214,22 +217,62 @@ does not include `~/.local/bin` — hence the absolute paths.
 Mango's `auto_reload_config` applies it immediately, so the keymap changes at
 the same moment the bar does.
 
-## Other compositors
+## Hyprland integration
 
-The core has no Mango dependency: launch, match, stop and wallpaper sync are
-all process/file level. The binds symlink is optional and skipped when
+The same config works; only `BINDS_LINK` and the reload differ.
+
+```sh
+mkdir -p ~/.config/hypr/cfg
+cp examples/hypr/binds-*.conf ~/.config/hypr/cfg/
+ln -sfn binds-dms.conf ~/.config/hypr/cfg/binds-active.conf
+```
+
+Set in `~/.config/shell-toggle/config`:
+
+```bash
+BINDS_LINK="$HOME/.config/hypr/cfg/binds-active.conf"
+```
+
+Add to `hyprland.conf`:
+
+```ini
+source = ~/.config/hypr/cfg/binds-common.conf
+source = ~/.config/hypr/cfg/binds-active.conf
+exec-once = ~/.local/bin/shell-start
+exec-once = ~/.local/bin/wallpaper-sync
+```
+
+Hyprland does not re-read a sourced file when the symlink changes, so the
+installed `post-switch` hook runs `hyprctl reload`. The example is in
+`examples/hypr`; the switch core, adapters, providers and process matching
+are the same as on Mango.
+
+## Compositor support
+
+The core has no compositor dependency: launch, match, stop and wallpaper sync
+are all process/file level. The binds symlink is optional and skipped when
 `BINDS_LINK` is not a symlink.
 
-- **Hyprland:** point `BINDS_LINK` at a file sourced by your Hyprland config
-  and copy `post-switch.example` to `~/.config/shell-toggle/post-switch` with
-  `hyprctl reload` uncommented.
-- **Sway/niri:** same idea; run your config reload (or nothing) from the hook.
-- **i3/X11:** process switching works for X11 bars, but quickshell-based
-  shells require Wayland.
+| Environment | Core switch | Shipped binds | Binds reload |
+| --- | --- | --- | --- |
+| MangoWM | tested | `examples/mango` | `auto_reload_config` (tested) |
+| Hyprland | same code path | `examples/hypr` (verification pending) | `post-switch` → `hyprctl reload` |
+| Sway | same code path | source the symlink yourself | `post-switch` → `swaymsg reload` |
+| niri | same code path | source the symlink yourself | config is applied live |
+| i3 / X11 | process switching only | none | see below |
 
-To be clear: this swaps the **shell/bar layer inside a running compositor**.
-It is not a compositor hot-swap — Hyprland and i3 cannot replace each other
-inside a live session.
+**i3 and other X11 sessions are not supported for DMS/Caelestia.**
+Quickshell renders through Wayland's layer-shell protocol, so those shells
+cannot run under X11 at all. The core is process-based, so you can describe
+two X11 bars (two Polybar instances, for example) in `SHELLS` and switch
+them, but there is no i3bar integration, no tested example, and `i3-msg
+reload` only reloads i3's own config. To be clear: this swaps the **shell/bar
+layer inside a running compositor**. It is not a compositor hot-swap —
+Hyprland and i3 cannot replace each other inside a live session.
+
+Run `shell-toggle check` after setup; it reports the detected session and
+validates every command, bind file, adapter and provider before you press the
+key.
 
 ## Wallpaper providers
 
@@ -266,6 +309,7 @@ shell-toggle next|prev      cycle forward/back
 shell-toggle <id>           switch to a configured shell
 shell-toggle list           all shells, * marks the active one
 shell-toggle status         active shell and whether it is running
+shell-toggle check          validate config, commands, binds and providers
 ```
 
 ```text
@@ -291,6 +335,10 @@ active shell's adapter; bundled adapters exist for DMS and Caelestia.
 | `~/.local/state/shell-toggle.lock` | switch serialisation |
 
 ## Troubleshooting
+
+**Start here.** Run `shell-toggle check`. It prints the detected session,
+the active state, and each shell's process, launch/stop commands, bind file,
+adapter and wallpaper provider.
 
 **A shell did not come up.** Check `/tmp/shell-toggle-<id>.log`. On failure
 the previous shell is intentionally left running.
@@ -320,6 +368,24 @@ rm -f ~/.local/bin/{shell-toggle,shell-start,shellctl,wallpaper-sync,shell-commo
 rm -rf ~/.config/shell-toggle
 rm -f ~/.local/state/shell-mode ~/.local/state/shell-toggle.*
 ```
+
+## Prior art
+
+Switching shells from a keypress is not new, and this project does not claim
+to have invented it:
+
+- [kellyson71/hypr-shell-switcher](https://github.com/kellyson71/hypr-shell-switcher)
+  switches end-4 ⇄ Caelestia on Hyprland with a frozen-frame overlay and
+  per-shell keybinds. Shells are added in code.
+- [ML4W dotfiles](https://github.com/mylinuxforwork/dotfiles) ship a
+  Waybar ⇄ Quickshell switch inside their Hyprland setup.
+- Ad-hoc `pkill waybar && waybar &` bindings are everywhere.
+
+What this project adds is the packaging: any number of shells from one config
+with no code edits, overlap instead of a frozen frame, DMS's backend/UI
+process pair handled explicitly, wallpaper providers, and a core that is not
+tied to one compositor. If you want a Hyprland-only, code-driven version,
+the project above is excellent.
 
 ## License
 

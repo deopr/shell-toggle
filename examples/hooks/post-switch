@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# post-switch example.
+# post-switch: runs after a shell has started and the binds symlink moved.
 #
-# Runs after a shell has successfully started and the old one is gone.
-# Uncomment the reload command for your compositor, then copy this file to
-# ~/.config/shell-toggle/post-switch and mark it executable.
+# Reloading is compositor-specific. This hook auto-detects the common ones
+# and is a no-op elsewhere, so it is safe to leave installed.
 #
-# Mango's auto_reload_config already picks up the binds-active symlink,
-# so nothing is needed there.
-#
-# hyprctl reload       # Hyprland
-# mango reload_config  # Mango, only if auto_reload_config is disabled
-# niri msg action do-screen-transition  # example: niri has no config reload
+# Mango's auto_reload_config already picks up the symlink; no reload needed.
+# niri reloads its config automatically.
+
+if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null 2>&1; then
+    hyprctl reload >/dev/null 2>&1 || true
+elif [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null 2>&1; then
+    swaymsg reload >/dev/null 2>&1 || true
+fi

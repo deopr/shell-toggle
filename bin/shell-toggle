@@ -108,6 +108,158 @@ switch_to() {
     shell_notify "now running: ${name}"
 }
 
+check_executable() {
+    case "$1" in
+        */*) [ -x "$1" ] ;;
+        *)   command -v "$1" >/dev/null 2>&1 ;;
+    esac
+}
+
+check_config() {
+    local errors=0 warnings=0 id name pids dir want adapter provider value configured
+    local -a m=() l=() s=() e=()
+
+    printf 'config: %s\n' "$SHELL_TOGGLE_CONF"
+    printf 'state:  %s (%s)\n' "$STATE_FILE" "$(current_shell)"
+    if [ -L "$BINDS_LINK" ]; then
+        printf 'binds:  %s -> %s\n' "$BINDS_LINK" "$(readlink "$BINDS_LINK")"
+        if [ ! -r "$BINDS_LINK" ]; then
+            printf '  error: symlink target is missing\n'
+            errors=$((errors + 1))
+        fi
+    else
+        printf 'binds:  %s (not a symlink; keybind swap disabled)\n' "$BINDS_LINK"
+    fi
+
+    for dep in pgrep pkill setsid; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            printf 'error: missing required command: %s\n' "$dep"
+            errors=$((errors + 1))
+        fi
+    done
+
+    printf 'session: '
+    if [ -n "${MANGO_INSTANCE_SIGNATURE:-}" ]; then
+        printf 'mango\n'
+    elif [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+        printf 'hyprland\n'
+    elif [ -n "${SWAYSOCK:-}" ]; then
+        printf 'sway\n'
+    elif [ -n "${NIRI_SOCKET:-}" ]; then
+        printf 'niri\n'
+    elif [ "${XDG_SESSION_TYPE:-}" = "x11" ]; then
+        printf 'x11 (quickshell shells require Wayland)\n'
+        warnings=$((warnings + 1))
+    else
+        printf 'unknown\n'
+    fi
+
+    for id in "${SHELLS[@]}"; do
+        name="$(shell_name "$id")"
+        pids="$(shell_pids "$id" 2>/dev/null | tr '\n' ' ' || true)"
+        pids="${pids% }"
+        printf '\n[%s] %s\n' "$id" "$name"
+        if [ -n "$pids" ]; then
+            printf '  process:  running (%s)\n' "$pids"
+        else
+            printf '  process:  stopped\n'
+        fi
+
+        shell_get_array "$id" match m
+        if ((${#m[@]})); then
+            printf '  match:    %s\n' "${m[*]}"
+        else
+            printf '  match:    MISSING (shell_%s_match)\n' "$id"
+            errors=$((errors + 1))
+        fi
+
+        shell_get_array "$id" launch l
+        if ((${#l[@]})); then
+            if check_executable "${l[0]}"; then
+                printf '  launch:   %s\n' "${l[*]}"
+            else
+                printf '  launch:   NOT FOUND: %s\n' "${l[0]}"
+                errors=$((errors + 1))
+            fi
+        else
+            printf '  launch:   MISSING (shell_%s_launch)\n' "$id"
+            errors=$((errors + 1))
+        fi
+
+        shell_get_array "$id" stop s
+        if ((${#s[@]})); then
+            if check_executable "${s[0]}"; then
+                printf '  stop:     %s\n' "${s[*]}"
+            else
+                printf '  stop:     NOT FOUND: %s\n' "${s[0]}"
+                errors=$((errors + 1))
+            fi
+        else
+            printf '  stop:     none (signals only)\n'
+        fi
+
+        shell_get_array "$id" env e
+        ((${#e[@]})) && printf '  env:      %s\n' "${e[*]}"
+
+        want="$(shell_get "$id" binds)"
+        if [ -n "$want" ]; then
+            dir="$(dirname -- "$BINDS_LINK")"
+            if [ -r "$dir/binds-$want.conf" ]; then
+                printf '  binds:    %s\n' "$dir/binds-$want.conf"
+            else
+                printf '  binds:    MISSING: %s\n' "$dir/binds-$want.conf"
+                errors=$((errors + 1))
+            fi
+        else
+            printf '  binds:    none\n'
+        fi
+
+        adapter="$(shell_get "$id" adapter)"
+        configured=0
+        if [ -z "$adapter" ]; then
+            adapter="$SHELL_TOGGLE_CONF_DIR/adapters/$id"
+        else
+            configured=1
+        fi
+        if [ -e "$adapter" ]; then
+            if [ -x "$adapter" ]; then
+                printf '  adapter:  %s\n' "$adapter"
+            else
+                printf '  adapter:  NOT EXECUTABLE: %s\n' "$adapter"
+                errors=$((errors + 1))
+            fi
+        elif [ "$configured" = "1" ]; then
+            printf '  adapter:  MISSING: %s\n' "$adapter"
+            errors=$((errors + 1))
+        else
+            printf '  adapter:  none (UI keys inert)\n'
+        fi
+
+        provider="$(shell_get "$id" wallpaper)"
+        if [ -n "$provider" ]; then
+            if [ ! -x "$provider" ]; then
+                printf '  wallpaper: NOT EXECUTABLE: %s\n' "$provider"
+                errors=$((errors + 1))
+            elif value="$("$provider" get 2>/dev/null)" && [ -n "$value" ]; then
+                if [ -e "$value" ]; then
+                    printf '  wallpaper: %s\n' "$value"
+                else
+                    printf '  wallpaper: stored path is gone: %s\n' "$value"
+                    warnings=$((warnings + 1))
+                fi
+            else
+                printf '  wallpaper: no stored value yet (start the shell once)\n'
+                warnings=$((warnings + 1))
+            fi
+        else
+            printf '  wallpaper: none\n'
+        fi
+    done
+
+    printf '\n%d error(s), %d warning(s)\n' "$errors" "$warnings"
+    [ "$errors" -eq 0 ]
+}
+
 usage() {
     cat <<'EOF'
 usage: shell-toggle [command|shell]
@@ -116,6 +268,7 @@ usage: shell-toggle [command|shell]
   prev           switch to the previous shell in SHELLS
   status         report the active shell and whether it is running
   list           list every configured shell, active one marked with *
+  check, doctor  validate config, commands, binds and providers
   <shell>        switch to that shell id
   help           show this help
 EOF
@@ -146,6 +299,9 @@ case "${1:-toggle}" in
             if shell_alive "$s"; then state="running"; else state="stopped"; fi
             printf '%s %-16s %-28s %s\n' "$marker" "$s" "$(shell_name "$s")" "$state"
         done
+        ;;
+    check|doctor)
+        check_config
         ;;
     -h|--help|help)
         usage
