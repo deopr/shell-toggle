@@ -1,5 +1,7 @@
 # shell-toggle
 
+[![tests](https://github.com/deopr/shell-toggle/actions/workflows/test.yml/badge.svg)](https://github.com/deopr/shell-toggle/actions/workflows/test.yml)
+
 **Hot-swap the status shell of a live Wayland desktop — one keypress, any number of shells.**
 
 `shell-toggle` was built to flip a MangoWM session between
@@ -273,6 +275,18 @@ Hyprland and i3 cannot replace each other inside a live session.
 Run `shell-toggle check` after setup; it reports the detected session and
 validates every command, bind file, adapter and provider before you press the
 key.
+
+## Tests
+
+```sh
+./tests/run.sh
+```
+
+The suite creates two fake shells, a fake adapter and two fake wallpaper
+providers in a temporary directory, then switches between them. It checks
+state, bind flips, process reaping, wallpaper propagation, `shell-start`,
+`shellctl`, `check`, and failure safety. No running desktop is touched.
+GitHub Actions runs the same script on every push and pull request.
 
 ## Wallpaper providers
 
