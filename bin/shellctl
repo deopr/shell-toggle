@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# shellctl - shell-agnostic keybind dispatcher.
+#
+# Keybinds call this instead of a shell's IPC directly, so swapping the
+# status shell does not require touching keybinds.conf. Two classes of
+# command are handled:
+#
+#   hardware   volume / mic / media / brightness
+#              Driven natively through wpctl, playerctl and light rather
+#              than delegated to a shell. These behave identically in
+#              every mode and never break because a shell lacks an IPC
+#              surface for them.
+#
+#   shell UI   panels / settings / screenshots
+#              Delegated to the adapter executable configured for the
+#              active shell (shell_<id>_adapter). Bundled adapters cover
+#              DMS and Caelestia; a new shell only needs its own adapter
+#              if it has panels worth opening. Without one, UI keys are
+#              inert while hardware keys keep working.
+#
+# State lives in $XDG_STATE_HOME/shell-mode; see shell-toggle.
+set -uo pipefail
+
+_SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)"
+# shellcheck source=shell-common.sh
+. "$_SCRIPT_DIR/shell-common.sh"
+
+warn() {
+    command -v notify-send >/dev/null 2>&1 && \
+        notify-send -a shellctl -u "${2:-low}" shellctl "$1" >/dev/null 2>&1
+    return 0
+}
+
+# --------------------------------------------------------------------------
+# hardware - native, identical for every shell
+# --------------------------------------------------------------------------
+# wpctl prints "Volume: 0.42" as a 0.00-1.00 float, and appends
+# " [MUTED]" when muted. So level is field 2 (scaled to percent) and the
+# mute flag is field 3. Parsing field 2 raw would be a fraction, and
+# truncating it to an int would pin volume at its floor forever.
+
+vol_pct()  { wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{printf "%d", $2*100}'; }
+vol_write(){ wpctl set-volume @DEFAULT_AUDIO_SINK@ "$1%" >/dev/null 2>&1; }
+
+vol_step() {
+    local cur=$1 step=$2 target
+    case "$2" in
+        up)   target=$(( cur + step )) ;;
+        down) target=$(( cur - step )) ;;
+    esac
+    [ "$target" -lt 0 ] && target=0
+    [ "$target" -gt 100 ] && target=100
+    vol_write "$target"
+}
+
+# Toggle needs prior state, so it cannot be expressed as a plain step.
+vol_toggle_mute() {
+    local flag; flag="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{print $3}')"
+    if [ "$flag" = "[MUTED]" ]; then
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 >/dev/null 2>&1
+    else
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ 1 >/dev/null 2>&1
+    fi
+}
+
+mic_toggle_mute() {
+    local flag; flag="$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | awk '{print $3}')"
+    if [ "$flag" = "[MUTED]" ]; then
+        wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 0 >/dev/null 2>&1
+    else
+        wpctl set-mute @DEFAULT_AUDIO_SOURCE@ 1 >/dev/null 2>&1
+    fi
+}
+
+media() {
+    if ! command -v playerctl >/dev/null; then
+        warn "playerctl not installed - media keys are inert"; return 0
+    fi
+    case "$1" in
+        next)     playerctl next ;;
+        previous) playerctl previous ;;
+        toggle)   playerctl play-pause ;;
+    esac
+}
+
+backlight() {
+    local dev
+    # `light` cannot auto-select a target without an ACPI/Intel backlight,
+    # so name the first sysfs device explicitly.
+    dev="$(ls -1 /sys/class/backlight/ 2>/dev/null | head -1)"
+    if [ -z "$dev" ]; then
+        warn "no backlight device present - brightness keys are inert"; return 0
+    fi
+    if ! command -v light >/dev/null; then
+        warn "light not installed - brightness keys are inert"; return 0
+    fi
+    case "$1" in
+        up)   light -s "$dev" -A "${2:-5}" >/dev/null 2>&1 ;;
+        down) light -s "$dev" -U "${2:-5}" >/dev/null 2>&1 ;;
+    esac
+}
+
+# --------------------------------------------------------------------------
+# shell UI adapter
+# --------------------------------------------------------------------------
+
+id=""
+adapter=""
+if [ "$SHELL_CONFIG_OK" = 1 ] && validate_shells >/dev/null 2>&1; then
+    id="$(current_shell)"
+    adapter="$(shell_get "$id" adapter)"
+    [ -n "$adapter" ] || adapter="$SHELL_TOGGLE_CONF_DIR/adapters/$id"
+    [ -x "$adapter" ] || adapter=""
+fi
+
+ui() {
+    if [ -z "$adapter" ]; then
+        if [ -n "$id" ]; then
+            warn "no UI adapter for shell \"$id\""
+        else
+            warn "no shell configured - UI command ignored"
+        fi
+        return 0
+    fi
+    "$adapter" "$@"
+}
+
+# --------------------------------------------------------------------------
+# entry point
+# --------------------------------------------------------------------------
+
+usage() {
+    cat <<'EOF'
+usage: shellctl <command> [args]
+
+  panel-toggle <id>          launcher | control-center | settings |
+                              wallpaper | clipboard | session |
+                              keybind-cheatsheet
+  panel-open <id>
+  panel-close <id>
+  settings-toggle
+  settings-open
+  screenshot-region
+  screenshot-fullscreen [all]
+  volume-up | volume-down | volume-mute
+  mic-mute
+  media next | previous | toggle
+  brightness-up | brightness-down
+
+UI commands go to the active shell's adapter. Unrecognised UI verbs are
+forwarded to the adapter as-is, so shell features added later keep working.
+EOF
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    panel-toggle|panel-open|panel-close|settings-toggle|settings-open)
+        ui "$cmd" "$@"
+        ;;
+    screenshot-region|screenshot-fullscreen)
+        ui "$cmd" "$@"
+        ;;
+
+    volume-up)   vol_step "$(vol_pct)" "${1:-5}" ;;
+    volume-down) vol_step "$(vol_pct)" "${1:-5}" ;;
+    volume-mute) vol_toggle_mute ;;
+    mic-mute)    mic_toggle_mute ;;
+    media)       media "${1:-toggle}" ;;
+
+    brightness-up)   backlight up   "${1:-5}" ;;
+    brightness-down) backlight down "${1:-5}" ;;
+
+    ""|-h|--help|help) usage ;;
+
+    *)
+        # Unknown verb: let the active shell's adapter try it, so new
+        # features keep working without editing this file.
+        ui "$cmd" "$@"
+        ;;
+esac

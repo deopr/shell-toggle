@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Caelestia adapter for shellctl.
+#
+# Caelestia's IPC target and function names are discovered from `qs ipc
+# show` at call time, so no internal names are hardcoded here.
+#
+# `qs ipc show` prints a two-level tree:
+#
+#     target rect
+#       function setColor(color: color): void
+#       function getColor(): color
+#       signal radiusChanged(newRadius: int)
+#
+# Only `target <name>` lines are callable targets; the indented lines are
+# that target's members.
+set -uo pipefail
+
+QS_CMD="${QS_CMD:-qs}"
+QS_IPC_ARGS="${QS_IPC_ARGS:--c caelestia}"
+QS_FUNCS_TOGGLE="toggle open show launch exec"
+QS_FUNCS_OPEN="open show toggle"
+
+warn() {
+    command -v notify-send >/dev/null 2>&1 && \
+        notify-send -a shellctl -u "${2:-low}" shellctl "$1" >/dev/null 2>&1
+    return 0
+}
+
+IPC_RAW=""
+ipc_show() {
+    [ -z "$IPC_RAW" ] && IPC_RAW="$("$QS_CMD" $QS_IPC_ARGS ipc show 2>/dev/null)"
+    [ -n "$IPC_RAW" ]
+}
+
+ipc_targets() {
+    ipc_show || return 1
+    printf '%s\n' "$IPC_RAW" | awk '$1=="target" && NF>=2 {print $2}'
+}
+
+# ipc_funcs <target> -> "<name> <argc>" per line, real functions only.
+#
+# A line looks like `  function setColor(color: color): void`, so the name
+# is field 2 with the parenthesised tail stripped off. Arity has to be
+# measured between the first "(" and the first ")" of the original line:
+# slicing after the "(" first loses the ")" and makes every zero-argument
+# function look like it took one.
+ipc_funcs() {
+    local want="$1"
+    ipc_show || return 1
+    printf '%s\n' "$IPC_RAW" | awk -v want="$want" '
+        $1=="target" { intarget = ($2 == want); next }
+        intarget && $1=="function" {
+            sig = $2
+            sub(/\(.*/, "", sig)
+            argc = 0
+            if (match($0, /\(/)) {
+                rest = substr($0, RSTART + 1)
+                if (match(rest, /\)/)) {
+                    inner = substr(rest, 1, RSTART - 1)
+                    gsub(/[ \t]/, "", inner)
+                    if (inner != "") argc = split(inner, a, ",")
+                }
+            }
+            print sig, argc
+        }'
+}
+
+norm() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '_-'; }
+
+# qs_call <keyword>... [preferred-verb-space-separated]
+#
+# Picks the first target whose name matches any keyword, then the best
+# function that target actually exposes: a zero-argument one whose name
+# looks like an action verb. Falls back to any zero-argument function,
+# because a shell naming its only entry point "run" should still work.
+qs_call() {
+    local verbs="${!#}"
+    local -a kws=("${@:1:$#-1}")
+    local kw kw_n t t_n fn fnargc best=""
+
+    ipc_targets >/dev/null || { warn "quickshell is not reachable"; return 1; }
+
+    for kw in "${kws[@]}"; do
+        [ -n "$kw" ] || continue
+        kw_n="$(norm "$kw")"
+        while read -r t; do
+            [ -n "$t" ] || continue
+            t_n="$(norm "$t")"
+            case "$t_n" in *"$kw_n"*) ;; *) continue ;; esac
+
+            while read -r fn fnargc; do
+                [ "$fnargc" = "0" ] || continue
+                case " $verbs " in
+                    *" $fn "*|" ${fn,,} "*)
+                        if "$QS_CMD" $QS_IPC_ARGS ipc call "$t" "$fn" >/dev/null 2>&1; then return 0; fi
+                        ;;
+                esac
+                [ -z "$best" ] && best="$t $fn"
+            done < <(ipc_funcs "$t")
+
+            # Falling back to any zero-arg function is unsafe: on
+            # Caelestia that would fire wallpaper.random() and shuffle
+            # the wallpaper on a keypress.
+            [ -z "$best" ] || best=""
+            while read -r fn fnargc; do
+                [ "$fnargc" = "0" ] || continue
+                case "${fn,,}" in
+                    *open*|*toggle*|*show*|*exec*|*launch*|*run*|*start*|*menu*|*trigger*)
+                        best="$t $fn"; break
+                        ;;
+                esac
+            done < <(ipc_funcs "$t")
+
+            if [ -n "$best" ]; then
+                # shellcheck disable=SC2086
+                set -- $best
+                if "$QS_CMD" $QS_IPC_ARGS ipc call "$1" "$2" >/dev/null 2>&1; then return 0; fi
+            fi
+        done < <(ipc_targets)
+    done
+
+    warn "quickshell exposes no target matching: ${kws[*]}"
+    return 1
+}
+
+screenshot_full() {
+    local out
+    out="$(mktemp -d)/shot-$(date +%Y%m%d-%H%M%S).png"
+    if ! command -v grim >/dev/null; then
+        warn "grim not installed - cannot capture"; return 0
+    fi
+    if grim "$out" 2>/dev/null; then
+        command -v xdg-open >/dev/null && xdg-open "$out" >/dev/null 2>&1 &
+    fi
+}
+
+panel() {
+    local action="$1" id="$2" keywords
+    case "$id" in
+        launcher)           keywords="launcher appgrid apps" ;;
+        control-center)     keywords="controlcenter quicksettings quicktoggles" ;;
+        settings)           keywords="settings config prefs" ;;
+        wallpaper)          keywords="wallpaper background" ;;
+        clipboard)          keywords="clipboard clipboardmanager" ;;
+        session)            keywords="session logout power" ;;
+        keybind-cheatsheet) keywords="keybind cheatsheet shortcuts" ;;
+        *)                  keywords="$id" ;;
+    esac
+    # Caelestia has no close verb; toggling the matching drawer is the
+    # honest equivalent.
+    # shellcheck disable=SC2086
+    qs_call $keywords "$QS_FUNCS_TOGGLE"
+}
+
+qs_screenshot() {
+    case "$1" in
+        region)     qs_call screenshot screenshottool screenregion "$QS_FUNCS_TOGGLE" && return 0 ;;
+        fullscreen) qs_call screenshot screen "$QS_FUNCS_TOGGLE" && return 0 ;;
+    esac
+    warn "no quickshell screenshot handler - capturing fullscreen instead"
+    screenshot_full
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    panel-toggle|panel-open) panel toggle "${1:-}" ;;
+    panel-close)             panel toggle "${1:-}" ;;
+    settings-toggle)         qs_call settings config prefs "$QS_FUNCS_TOGGLE" ;;
+    settings-open)           qs_call settings config prefs "$QS_FUNCS_OPEN" ;;
+    screenshot-region)       qs_screenshot region ;;
+    screenshot-fullscreen)   qs_screenshot fullscreen ;;
+    *)
+        qs_call "$cmd" "$QS_FUNCS_TOGGLE"
+        ;;
+esac

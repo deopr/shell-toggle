@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# shell-start - bring up whichever shell was active last session, with the
+# matching keybind set. Designed to be called once from the compositor's
+# autostart (Mango: exec_once).
+#
+# Nothing here is hardcoded to a shell: the launch command and environment
+# come from the config block of the shell named in the state file.
+set -uo pipefail
+
+_SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)"
+# shellcheck source=shell-common.sh
+. "$_SCRIPT_DIR/shell-common.sh"
+
+if [ "$SHELL_CONFIG_OK" != 1 ]; then
+    printf 'shell-start: config not found: %s\n' "$SHELL_TOGGLE_CONF" >&2
+    exit 1
+fi
+validate_shells || exit 1
+
+id="$(current_shell)"
+cmd=()
+envs=()
+shell_get_array "$id" launch cmd
+if ((${#cmd[@]} == 0)); then
+    printf 'shell-start: shell "%s" has no launch command in %s\n' "$id" "$SHELL_TOGGLE_CONF" >&2
+    exit 1
+fi
+
+shell_swap_binds "$id"
+
+log="$(shell_log_file "$id")"
+exec >>"$log" 2>&1
+printf '\n=== shell-start %s: %s ===\n' "$(date '+%F %T')" "$id"
+
+shell_get_array "$id" env envs
+if ((${#envs[@]})); then
+    export "${envs[@]}"
+fi
+
+exec "${cmd[@]}"

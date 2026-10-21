@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# wallpaper-sync - keep one wallpaper path across every configured shell.
+#
+# Shells persist their wallpaper in different places and formats (JSON,
+# plain text, ...). Rather than knowing about any of them, each shell can
+# point at a tiny provider executable in the config:
+#
+#   shell_<id>_wallpaper="$HOME/.config/shell-toggle/wallpaper/<id>"
+#
+# Provider interface:
+#   provider get        print the stored wallpaper path
+#   provider set PATH   store it
+#
+# The sync only writes to a shell that is NOT running. A live shell keeps
+# its own in-memory copy and would clobber the file the next time it
+# saves. Because only one shell is active at a time, the others' files
+# are inert and safe to rewrite.
+#
+# Usage:
+#   wallpaper-sync            run as a poll-based daemon
+#   wallpaper-sync --once     reconcile immediately and exit
+#   wallpaper-sync --status   print every provider's value
+set -uo pipefail
+
+_SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)"
+# shellcheck source=shell-common.sh
+. "$_SCRIPT_DIR/shell-common.sh"
+
+if [ "$SHELL_CONFIG_OK" != 1 ]; then
+    printf 'wallpaper-sync: config not found: %s\n' "$SHELL_TOGGLE_CONF" >&2
+    exit 1
+fi
+validate_shells || exit 1
+
+IDS=()
+PROVIDERS=()
+
+provider_ids() {
+    IDS=()
+    PROVIDERS=()
+    local id p
+    for id in "${SHELLS[@]}"; do
+        p="$(shell_get "$id" wallpaper)"
+        [ -n "$p" ] || continue
+        [ -x "$p" ] || continue
+        IDS+=("$id")
+        PROVIDERS+=("$p")
+    done
+}
+
+read_wall() {
+    local id="$1" i
+    for i in "${!IDS[@]}"; do
+        if [ "${IDS[i]}" = "$id" ]; then
+            "${PROVIDERS[i]}" get 2>/dev/null
+            return
+        fi
+    done
+    return 1
+}
+
+write_wall() {
+    local id="$1" value="$2" i
+    for i in "${!IDS[@]}"; do
+        if [ "${IDS[i]}" = "$id" ]; then
+            "${PROVIDERS[i]}" set "$value" >/dev/null 2>&1
+            return
+        fi
+    done
+    return 1
+}
+
+# Push one authoritative value into every other provider, if that shell
+# is not running and the stored path still exists.
+reconcile() {
+    local source="$1" ref="" ref_id="" id value
+    provider_ids
+    ((${#IDS[@]})) || return 0
+
+    if [ -n "$source" ]; then
+        value="$(read_wall "$source" || true)"
+        if [ -n "$value" ]; then
+            ref="$value"
+            ref_id="$source"
+        fi
+    fi
+
+    # Without an explicit source, trust the shell that is actually
+    # running. During a toggle the outgoing shell is still up, which is
+    # exactly who the wallpaper should be read from.
+    if [ -z "$ref_id" ]; then
+        for id in "${IDS[@]}"; do
+            shell_alive "$id" || continue
+            value="$(read_wall "$id" || true)"
+            if [ -n "$value" ]; then
+                ref="$value"
+                ref_id="$id"
+                break
+            fi
+        done
+    fi
+
+    [ -n "$ref_id" ] || return 0
+    [ -e "$ref" ] || return 0          # never propagate a dead path
+
+    for id in "${IDS[@]}"; do
+        [ "$id" = "$ref_id" ] && continue
+        shell_alive "$id" && continue  # would be clobbered on exit
+        value="$(read_wall "$id" || true)"
+        [ "$value" = "$ref" ] && continue
+        write_wall "$id" "$ref"
+    done
+}
+
+poll_loop() {
+    local -A prev=()
+    local id value changed n
+    provider_ids
+    if ((${#IDS[@]} == 0)); then
+        printf 'wallpaper-sync: no wallpaper providers configured\n' >&2
+        exit 0
+    fi
+
+    for id in "${IDS[@]}"; do
+        prev[$id]="$(read_wall "$id" || true)"
+    done
+
+    while sleep "${WALLPAPER_POLL:-1}"; do
+        changed=""
+        n=0
+        for id in "${IDS[@]}"; do
+            value="$(read_wall "$id" || true)"
+            if [ "$value" != "${prev[$id]}" ] && [ -n "$value" ]; then
+                changed="$id"
+                n=$((n + 1))
+            fi
+            prev[$id]="$value"
+        done
+        if [ "$n" -eq 1 ]; then
+            reconcile "$changed"
+        elif [ "$n" -gt 1 ]; then
+            # Several changed between polls: prefer the running shell.
+            reconcile ""
+        fi
+    done
+}
+
+case "${1:-daemon}" in
+    --once)
+        reconcile ""
+        ;;
+    --status)
+        provider_ids
+        if ((${#IDS[@]} == 0)); then
+            printf '(no wallpaper providers configured)\n'
+            exit 0
+        fi
+        for id in "${IDS[@]}"; do
+            printf '%-16s %s\n' "$id" "$(read_wall "$id" || echo '(unreadable)')"
+        done
+        ;;
+    -h|--help)
+        sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    daemon)
+        reconcile ""
+        poll_loop
+        ;;
+    *)
+        printf 'wallpaper-sync: unknown argument: %s\n' "$1" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# DMS wallpaper provider. Reads and writes only the top-level
+# "wallpaperPath" in session.json.
+#
+# DMS rewrites that file on every session-state change, so everything
+# else must round-trip untouched - which is why this is a JSON edit
+# rather than a line rewrite.
+set -euo pipefail
+
+SESSION="${XDG_STATE_HOME:-$HOME/.local/state}/DankMaterialShell/session.json"
+cmd="${1:-get}"
+
+case "$cmd" in
+    get)
+        [ -r "$SESSION" ] || exit 1
+        python3 - "$SESSION" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(1)
+path = data.get("wallpaperPath", "")
+if not path:
+    raise SystemExit(1)
+print(path, end="")
+PY
+        ;;
+    set)
+        path="${2:-}"
+        [ -n "$path" ] || exit 2
+        [ -r "$SESSION" ] || exit 1
+        python3 - "$SESSION" "$path" <<'PY'
+import json, sys
+target, new = sys.argv[1], sys.argv[2]
+try:
+    with open(target) as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(1)
+data["wallpaperPath"] = new
+with open(target, "w") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+PY
+        ;;
+    *)
+        printf 'usage: %s get|set <path>\n' "$0" >&2
+        exit 2
+        ;;
+esac

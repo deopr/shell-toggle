@@ -1,0 +1,89 @@
+# shell-toggle configuration.
+#
+# Sourced by shell-toggle, shell-start, shellctl and wallpaper-sync. It is
+# plain bash, but you only need assignments and arrays.
+#
+# To add a shell: append its id to SHELLS and add a shell_<id>_* block
+# below. `shell-toggle toggle` walks SHELLS in order, so two entries are
+# just the smallest rotation. Ids must match [A-Za-z_][A-Za-z0-9_]*.
+
+SHELLS=(dms caelestia)
+
+# --- shared settings ------------------------------------------------------
+
+# Optional: symlink that shell-toggle repoints at binds-<binds>.conf.
+# Remove this line (or point it elsewhere) to disable keybind swapping.
+BINDS_LINK="$HOME/.config/mango/cfg/binds-active.conf"
+
+SPAWN_TIMEOUT="6"     # max seconds to wait for a launched shell to appear
+REAP_GRACE="0.25"     # seconds between TERM and KILL when reaping
+DEFAULT_WARMUP="0.35" # per-shell override available below
+SYNC_WALLPAPER="1"    # run wallpaper-sync --once before switching
+WALLPAPER_POLL="1"    # wallpaper-sync daemon poll interval
+NOTIFY="1"            # desktop notifications
+
+# --- DMS ------------------------------------------------------------------
+# DankMaterialShell runs as one `dms run` process that also owns a
+# quickshell UI child. `match` uses the exact process name because the
+# dms CLI (`dms run`, `dms kill`, ...) shares it; argv matching would see
+# the CLI calls too.
+shell_dms_name="DankMaterialShell"
+shell_dms_match=(-x dms)
+shell_dms_also_match=(-f '^(/[^ ]*/)?qs -p /run/user/[0-9]+/danklinux-shell/')
+shell_dms_launch=(dms run)
+shell_dms_stop=(dms kill)
+shell_dms_warmup="0.45"
+shell_dms_binds="dms"
+shell_dms_adapter="$HOME/.config/shell-toggle/adapters/dms"
+shell_dms_wallpaper="$HOME/.config/shell-toggle/wallpaper/dms"
+
+# --- Caelestia ------------------------------------------------------------
+# Caelestia is a quickshell config. Anchoring the pattern to the whole
+# argv keeps it from matching DMS's quickshell UI (or the toggle itself).
+shell_caelestia_name="Caelestia"
+shell_caelestia_match=(-f '^(/[^ ]*/)?qs -c caelestia$')
+shell_caelestia_launch=(qs -c caelestia)
+shell_caelestia_env=(
+    CAELESTIA_LIB_DIR=/usr/lib64/caelestia
+    CAELESTIA_XKB_RULES_PATH=/usr/share/X11/xkb/rules/base.lst
+)
+shell_caelestia_warmup="0.40"
+shell_caelestia_binds="caelestia"
+shell_caelestia_adapter="$HOME/.config/shell-toggle/adapters/caelestia"
+shell_caelestia_wallpaper="$HOME/.config/shell-toggle/wallpaper/caelestia"
+
+# --- wanted something else? ----------------------------------------------
+# A minimal third shell. Append "waybar" to SHELLS to enable it. No binds,
+# adapter or wallpaper provider is required - those features are optional.
+#
+#shell_waybar_name="Waybar"
+#shell_waybar_match=(-x waybar)
+#shell_waybar_launch=(waybar)
+#shell_waybar_stop=(pkill -x waybar)
+#shell_waybar_warmup="0.20"
+
+# Another quickshell config, this time by explicit path:
+#
+#shell_noctalia_name="Noctalia"
+#shell_noctalia_match=(-f '^(/[^ ]*/)?qs -p /path/to/noctalia/shell.qml$')
+#shell_noctalia_launch=(qs -p /path/to/noctalia/shell.qml)
+#shell_noctalia_warmup="0.40"
+
+# --- shell fields ---------------------------------------------------------
+# name         label used in notifications (defaults to the id)
+# match        pgrep/pkill argument list that identifies the shell (required)
+# also_match   extra pgrep/pkill args for helper processes that must die too
+# launch       argv used to start the shell (required)
+# stop         optional graceful shutdown command, run before signals
+# env          optional KEY=VALUE array exported before launch
+# warmup       seconds to let the incoming shell animate (default 0.35)
+# timeout      seconds to wait for it to appear (default SPAWN_TIMEOUT)
+# binds        suffix of the binds file to activate (binds-<x>.conf)
+# adapter      executable that handles shellctl's UI commands
+# wallpaper    executable provider with `get` and `set PATH`
+
+# --- hooks ----------------------------------------------------------------
+# Optional executables in ~/.config/shell-toggle/:
+#   prep-<id>    runs right before that shell is reaped
+#   post-switch  runs after a successful switch (good place for
+#                `hyprctl reload`, `mango reload_config`, etc.)

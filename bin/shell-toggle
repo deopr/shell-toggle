@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# shell-toggle - cycle a running Wayland desktop between multiple status
+# shells without logging out.
+#
+# Every shell is described in ~/.config/shell-toggle/config: what process
+# to look for, how to start it, how to stop it, and optionally which
+# keybind file and wallpaper provider belong to it. `shell-toggle toggle`
+# walks the SHELLS array, so two shells are just the smallest case.
+#
+# WHY THIS IS NOT A CROSSFADE
+# ----------------------------
+# A real crossfade is impossible here, and no configuration can change
+# that:
+#
+#   * wlr-layer-shell exposes no "this surface is going away" callback,
+#     so a compositor has nothing to hook an exit animation onto. A
+#     killed shell's bar is unmapped in the same frame it dies.
+#   * Shells generally expose no opacity or animation setter over IPC
+#     that could fade their own bar out; hide/show toggles are
+#     instantaneous.
+#   * Mango applies `no_animation` to layer-shell surfaces, so it will
+#     not animate them either.
+#
+# What is achievable is an overlap: the incoming shell comes up FIRST and
+# plays its own intro animation while the outgoing bar is still on
+# screen, and only then is the outgoing shell reaped. The swap order is
+# the entire effect - reversing it leaves a bare desktop for a beat and
+# throws away the incoming shell's intro.
+#
+# Tune shell_<id>_warmup in the config. Set it to 0 for a hard cut.
+# `prep-<id>` hooks run before a shell is reaped, which is the place to
+# release an exclusive zone if two bars visibly collide.
+set -uo pipefail
+
+_SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd -P)"
+# shellcheck source=shell-common.sh
+. "$_SCRIPT_DIR/shell-common.sh"
+
+if [ "$SHELL_CONFIG_OK" != 1 ]; then
+    printf 'shell-toggle: config not found: %s\n' "$SHELL_TOGGLE_CONF" >&2
+    exit 1
+fi
+validate_shells || exit 1
+
+take_lock() {
+    mkdir -p "$XDG_STATE_HOME" || shell_die "cannot create $XDG_STATE_HOME"
+    # Serialise switches: two rapid presses would race on the state file
+    # and could leave the session with no shell running.
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$LOCK_FILE"
+        flock -n 9 || { shell_notify "a switch is already in progress"; exit 0; }
+    fi
+}
+
+switch_to() {
+    local target="$1" from name s timeout
+    from="$(current_shell)"
+    name="$(shell_name "$target")"
+
+    if shell_alive "$target"; then
+        shell_write_state "$target"
+        shell_swap_binds "$target"
+        shell_notify "${name} is already running"
+        return 0
+    fi
+
+    # Carry the outgoing shell's wallpaper into the incoming one. Runs
+    # while the outgoing shell is still up so it can act as the source.
+    if [ "${SYNC_WALLPAPER:-1}" = "1" ] && [ -x "$WALLPAPER_SYNC" ]; then
+        "$WALLPAPER_SYNC" --once >/dev/null 2>&1 || true
+    fi
+
+    shell_launch "$target" || shell_die "could not launch ${name}"
+    timeout="$(shell_timeout "$target")"
+    if ! shell_wait_up "$target" "$timeout"; then
+        # Leave the outgoing shell alone: a failed switch must not cost
+        # the user their bar.
+        shell_die "${name} did not come up within ${timeout}s - ${from} left running (log: $(shell_log_file "$target"))"
+    fi
+
+    # Incoming shell is up and painting; let its intro finish.
+    sleep "$(shell_warmup "$target")"
+
+    # Re-check liveness AFTER the warmup. A shell can satisfy wait_up and
+    # then die a moment later - a version mismatch or a QML error does
+    # exactly that. Reaping the outgoing shell at that point would leave
+    # the session with no bar at all, so this second check is the one
+    # that actually protects the user.
+    if ! shell_alive "$target"; then
+        shell_die "${name} exited during startup - ${from} left running (log: $(shell_log_file "$target"))"
+    fi
+
+    # Reap every other configured shell, not just the previous active
+    # one. That also cleans up a crashed shell that is somehow still
+    # present, and keeps the "one active shell" contract true with more
+    # than two entries.
+    for s in "${SHELLS[@]}"; do
+        [ "$s" = "$target" ] && continue
+        shell_alive "$s" && shell_reap "$s"
+    done
+
+    # Bind set and state follow the shell, and land only once the new
+    # shell is confirmed alive - otherwise a failed switch would also
+    # leave you with the wrong keys.
+    shell_swap_binds "$target"
+    shell_write_state "$target"
+    shell_run_hook post-switch
+    shell_notify "now running: ${name}"
+}
+
+usage() {
+    cat <<'EOF'
+usage: shell-toggle [command|shell]
+
+  toggle, next   switch to the next shell in SHELLS (default)
+  prev           switch to the previous shell in SHELLS
+  status         report the active shell and whether it is running
+  list           list every configured shell, active one marked with *
+  <shell>        switch to that shell id
+  help           show this help
+EOF
+}
+
+case "${1:-toggle}" in
+    toggle|next)
+        take_lock
+        switch_to "$(cycle_shell "$(current_shell)" 1)"
+        ;;
+    prev)
+        take_lock
+        switch_to "$(cycle_shell "$(current_shell)" -1)"
+        ;;
+    status)
+        m="$(current_shell)"
+        if shell_alive "$m"; then
+            printf '%s (running)\n' "$m"
+        else
+            printf '%s (not running)\n' "$m"
+        fi
+        ;;
+    list)
+        m="$(current_shell)"
+        for s in "${SHELLS[@]}"; do
+            marker=" "
+            [ "$s" = "$m" ] && marker="*"
+            if shell_alive "$s"; then state="running"; else state="stopped"; fi
+            printf '%s %-16s %-28s %s\n' "$marker" "$s" "$(shell_name "$s")" "$state"
+        done
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        if valid_shell "$1"; then
+            take_lock
+            switch_to "$1"
+        else
+            printf 'shell-toggle: unknown command or shell: %s\n' "$1" >&2
+            printf 'configured shells: %s\n' "${SHELLS[*]}" >&2
+            usage >&2
+            exit 1
+        fi
+        ;;
+esac

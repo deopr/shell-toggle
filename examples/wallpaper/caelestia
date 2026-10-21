@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Caelestia wallpaper provider.
+#
+# Caelestia stores the raw path in path.txt (no trailing newline) and
+# keeps a `current` symlink next to it.
+set -euo pipefail
+
+DIR="${XDG_STATE_HOME:-$HOME/.local/state}/caelestia/wallpaper"
+cmd="${1:-get}"
+
+case "$cmd" in
+    get)
+        [ -r "$DIR/path.txt" ] || exit 1
+        tr -d '\n' < "$DIR/path.txt"
+        ;;
+    set)
+        path="${2:-}"
+        [ -n "$path" ] || exit 2
+        mkdir -p "$DIR"
+        printf '%s' "$path" > "$DIR/path.txt"
+        ln -sfn "$path" "$DIR/current" 2>/dev/null || true
+        ;;
+    *)
+        printf 'usage: %s get|set <path>\n' "$0" >&2
+        exit 2
+        ;;
+esac

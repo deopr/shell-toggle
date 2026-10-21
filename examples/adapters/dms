@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# DMS panel/settings/screenshot adapter for shellctl.
+#
+# Target names verified against DMS's IPC docs:
+#   spotlight       toggle()           launcher
+#   control-center  toggle()           quick settings
+#   settings        focusOrToggle()
+#   dash            toggle(wallpaper)  wallpaper picker
+#   clipboard       toggle()
+#   powermenu       toggle()           session menu
+#   keybinds        toggle(mangowc)    cheatsheet parsed from the live
+#                                      mango config
+set -uo pipefail
+
+DMS_CMD="${DMS_CMD:-dms}"
+
+panel() {
+    local action="$1" id="$2" target verb extra=""
+    case "$id" in
+        launcher)           target=spotlight;      verb=toggle ;;
+        control-center)     target=control-center; verb=toggle ;;
+        settings)           target=settings;       verb=focusOrToggle ;;
+        wallpaper)          target=dash;           verb=toggle; extra=wallpaper ;;
+        clipboard)          target=clipboard;      verb=toggle ;;
+        session)            target=powermenu;      verb=toggle ;;
+        keybind-cheatsheet) target=keybinds;       verb=toggle; extra=mangowc ;;
+        *)                  target="$id";          verb="$action" ;;
+    esac
+    [ "$action" = close ] && { verb=close; extra=""; }
+    if [ -n "$extra" ]; then
+        "$DMS_CMD" ipc call "$target" "$verb" "$extra"
+    else
+        "$DMS_CMD" ipc call "$target" "$verb"
+    fi
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    panel-toggle)           panel toggle "${1:-}" ;;
+    panel-open)             panel open   "${1:-}" ;;
+    panel-close)            panel close  "${1:-}" ;;
+    settings-toggle)        "$DMS_CMD" ipc call settings focusOrToggle ;;
+    settings-open)          "$DMS_CMD" ipc call settings open ;;
+    screenshot-region)      "$DMS_CMD" screenshot region ;;
+    screenshot-fullscreen)
+        if [ "${1:-}" = all ]; then
+            "$DMS_CMD" screenshot all
+        else
+            "$DMS_CMD" screenshot full
+        fi
+        ;;
+    *)
+        printf 'dms adapter: unknown command: %s\n' "$cmd" >&2
+        exit 2
+        ;;
+esac

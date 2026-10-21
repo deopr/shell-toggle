@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# post-switch example.
+#
+# Runs after a shell has successfully started and the old one is gone.
+# Uncomment the reload command for your compositor, then copy this file to
+# ~/.config/shell-toggle/post-switch and mark it executable.
+#
+# Mango's auto_reload_config already picks up the binds-active symlink,
+# so nothing is needed there.
+#
+# hyprctl reload       # Hyprland
+# mango reload_config  # Mango, only if auto_reload_config is disabled
+# niri msg action do-screen-transition  # example: niri has no config reload
