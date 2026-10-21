@@ -1,5 +1,7 @@
 # shell-toggle
 
+![shell-toggle demo](demo.gif)
+
 [![tests](https://github.com/deopr/shell-toggle/actions/workflows/test.yml/badge.svg)](https://github.com/deopr/shell-toggle/actions/workflows/test.yml)
 
 **Hot-swap the status shell of a live Wayland desktop — one keypress, any number of shells.**
