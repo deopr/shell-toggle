@@ -3,7 +3,7 @@
 
 [![tests](https://github.com/deopr/shell-toggle/actions/workflows/test.yml/badge.svg)](https://github.com/deopr/shell-toggle/actions/workflows/test.yml)
 
-**Hot-swap the status shell of a live Wayland desktop — one keypress, any number of shells.**
+**Found a better config but don’t want to give up your old one? Keep both!**
 
 https://github.com/user-attachments/assets/e7ca6222-0ca0-4d59-b490-f1c86e82728d
 
